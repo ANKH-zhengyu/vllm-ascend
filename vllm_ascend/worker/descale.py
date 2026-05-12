@@ -254,6 +254,34 @@ def reinit_comm_group(use_mask_mc2: bool, vllm_config: VllmConfig, worker: NPUWo
         worker._init_worker_distributed_environment()
 
 
+def _is_mtp_speculative(vllm_config) -> bool:
+    spec_config = getattr(vllm_config, "speculative_config", None)
+    if spec_config is None:
+        return False
+    return spec_config.method == "mtp"
+
+
+def _get_mtp_num_layers(vllm_config) -> int:
+    if not _is_mtp_speculative(vllm_config):
+        return 0
+
+    draft = getattr(vllm_config.speculative_config, "draft_model_config", None)
+    if draft is not None:
+        num = draft.get_total_num_hidden_layers()
+        if num > 0:
+            return num
+
+    hf = vllm_config.model_config.hf_config
+    for attr in ("num_nextn_predict_layers", "mtp_num_hidden_layers", "n_predict"):
+        num = getattr(hf, attr, None)
+        if num:
+            return num
+
+    raise RuntimeError(
+        "MTP layer count not found in model config; unsupported model configuration."
+    )
+
+
 def save_expert_weights_to_ram(
     cur_rank_need_load_h2d,
     vllm_config,
@@ -286,10 +314,37 @@ def save_expert_weights_to_ram(
     weight_suffixes = BASE_WEIGHT_SUFFIXES.union(QUANT_WEIGHT_SUFFIXES) if quant else BASE_WEIGHT_SUFFIXES
 
     def _generate_expert_weight_name(layer_id: int, expert_id: int, suffix: str) -> str:
-        """Generate the full parameter name for a single expert weight."""
+        if layer_id < num_hidden_layers:
+            return f"model.layers.{layer_id}.mlp.experts.{expert_id}.{suffix}"
+
+        mtp_local_idx = layer_id - num_hidden_layers
+        if mtp_local_idx >= num_mtp_layers:
+            raise RuntimeError(
+                f"MTP layer index out of range: layer_id={layer_id}, "
+                f"mtp_local_idx={mtp_local_idx}, num_mtp_layers={num_mtp_layers}"
+            )
+
+        model_type = getattr(vllm_config.model_config.hf_config, "model_type", "")
+        if model_type in ("nemotron_h", "nemotron_h_mtp"):
+            return f"mtp.layers.{mtp_local_idx}.mlp.experts.{expert_id}.{suffix}"
+        if model_type in ("qwen3_next", "qwen3_next_mtp",
+                           "qwen3_5", "qwen3_5_moe", "qwen3_5_mtp"):
+            return f"mtp.layers.{mtp_local_idx}.mlp.experts.{expert_id}.{suffix}"
+        if model_type in ("exaone_moe", "exaone_moe_mtp"):
+            return f"mtp.layers.{mtp_local_idx}.mlp.experts.{expert_id}.{suffix}"
+        if model_type in ("longcat_flash", "longcat_flash_mtp"):
+            return (
+                f"model.mtp.layers.{mtp_local_idx}.transformer_layer.mlp.experts."
+                f"{expert_id}.{suffix}"
+            )
+        if model_type in ("ernie4_5_moe", "ernie_mtp"):
+            return f"model.mtp_block.0.mlp.experts.{expert_id}.{suffix}"
+
         return f"model.layers.{layer_id}.mlp.experts.{expert_id}.{suffix}"
 
     num_dense_layers = getattr(model_runner.model.config, "first_k_dense_replace", 0)
+    num_hidden_layers = getattr(model_runner.model.config, "num_hidden_layers", 0)
+    num_mtp_layers = _get_mtp_num_layers(vllm_config)
     weights_to_save = set()
     for index, cur_layer_need_load_h2d in enumerate(cur_rank_need_load_h2d):
         layer_id = index + num_dense_layers
@@ -716,5 +771,15 @@ def get_global_expert_map(model_runner):
     for layer_id in range(num_moe_layers):
         map_cpu = model_runner.model.model.layers[num_dense_layers + layer_id].mlp.experts.global_expert_map.cpu()
         all_layer_global_expert_map.append(map_cpu)
+    vllm_config = getattr(model_runner, "vllm_config", None)
+    num_mtp_layers = _get_mtp_num_layers(vllm_config)
+    if num_mtp_layers > 0:
+        drafter = getattr(model_runner, "drafter", None)
+        if drafter is not None and hasattr(drafter, "model"):
+            mtp_model = drafter.model
+            for mtp_layer_idx in range(num_mtp_layers):
+                mtp_layer = mtp_model.model.layers[mtp_layer_idx]
+                map_cpu = mtp_layer.mlp.experts.global_expert_map.cpu()
+                all_layer_global_expert_map.append(map_cpu)
 
     return torch.stack(all_layer_global_expert_map)
