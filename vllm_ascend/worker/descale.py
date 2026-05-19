@@ -277,9 +277,7 @@ def _get_mtp_num_layers(vllm_config) -> int:
         if num:
             return num
 
-    raise RuntimeError(
-        "MTP layer count not found in model config; unsupported model configuration."
-    )
+    raise RuntimeError("MTP layer count not found in model config; unsupported model configuration.")
 
 
 def save_expert_weights_to_ram(
@@ -327,16 +325,12 @@ def save_expert_weights_to_ram(
         model_type = getattr(vllm_config.model_config.hf_config, "model_type", "")
         if model_type in ("nemotron_h", "nemotron_h_mtp"):
             return f"mtp.layers.{mtp_local_idx}.mlp.experts.{expert_id}.{suffix}"
-        if model_type in ("qwen3_next", "qwen3_next_mtp",
-                           "qwen3_5", "qwen3_5_moe", "qwen3_5_mtp"):
+        if model_type in ("qwen3_next", "qwen3_next_mtp", "qwen3_5", "qwen3_5_moe", "qwen3_5_mtp"):
             return f"mtp.layers.{mtp_local_idx}.mlp.experts.{expert_id}.{suffix}"
         if model_type in ("exaone_moe", "exaone_moe_mtp"):
             return f"mtp.layers.{mtp_local_idx}.mlp.experts.{expert_id}.{suffix}"
         if model_type in ("longcat_flash", "longcat_flash_mtp"):
-            return (
-                f"model.mtp.layers.{mtp_local_idx}.transformer_layer.mlp.experts."
-                f"{expert_id}.{suffix}"
-            )
+            return f"model.mtp.layers.{mtp_local_idx}.transformer_layer.mlp.experts.{expert_id}.{suffix}"
         if model_type in ("ernie4_5_moe", "ernie_mtp"):
             return f"model.mtp_block.0.mlp.experts.{expert_id}.{suffix}"
 
