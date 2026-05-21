@@ -258,7 +258,8 @@ def _is_mtp_speculative(vllm_config) -> bool:
     spec_config = getattr(vllm_config, "speculative_config", None)
     if spec_config is None:
         return False
-    return spec_config.method == "mtp"
+    method = getattr(spec_config, "method", None)
+    return method == "mtp" or (isinstance(method, str) and method.endswith("_mtp"))
 
 
 def _get_mtp_num_layers(vllm_config) -> int:
@@ -386,11 +387,16 @@ def expand_parameter(old_param, axis: int = 0, extra_lines: int = 1) -> torch.nn
 
 
 def expand_expert_weights(model_runner: NPUModelRunner, expand_lines: int, quant: bool | str) -> None:
-    if expand_lines:
-        for module in model_runner.model.modules():
-            if isinstance(module, FusedMoE) and expand_lines:
+    if not expand_lines:
+        return
+    models = [model_runner.model]
+    draft_model = getattr(getattr(model_runner, "drafter", None), "model", None)
+    if draft_model is not None:
+        models.append(draft_model)
+    for model in models:
+        for module in model.modules():
+            if isinstance(module, FusedMoE):
                 if quant:
-                    # TODO: needs verification
                     module.w2_weight_list = expand_parameter(module.w2_weight_list, 0, expand_lines)
                     module.w13_weight_list = expand_parameter(module.w13_weight_list, 0, expand_lines)
                     module.w2_weight_scale_list = expand_parameter(module.w2_weight_scale_list, 0, expand_lines)
@@ -505,8 +511,16 @@ def reload_fault_expert_weights(
             if cur_rank_need_load_h2d[cur_layer_id] is not None:
                 for slot_pos, expert_id in cur_rank_need_load_h2d[cur_layer_id]:
                     _load_single_expert(expert_id=expert_id, target_index=slot_pos, quant=quant)
-
             cur_layer_id += 1
+
+    draft_model = getattr(getattr(model_runner, "drafter", None), "model", None)
+    if draft_model is not None:
+        for module in draft_model.modules():
+            if isinstance(module, FusedMoE):
+                if cur_rank_need_load_h2d[cur_layer_id] is not None:
+                    for slot_pos, expert_id in cur_rank_need_load_h2d[cur_layer_id]:
+                        _load_single_expert(expert_id=expert_id, target_index=slot_pos, quant=quant)
+                cur_layer_id += 1
 
 
 def update_parallel_config(original_config: VllmConfig, update_config: dict[str, int]) -> None:  # , worker_guard)
@@ -648,9 +662,14 @@ def reconfigure_moe(
     new_ep_size = parallel_config.data_parallel_size * parallel_config.tensor_parallel_size
     get_ascend_config().eplb_config.num_redundant_experts = num_global_new_phy_experts - num_global_logical_experts
 
-    moe_moules = [module for module in modelrunner.model.modules() if isinstance(module, FusedMoE)]
+    moe_modules = [module for module in modelrunner.model.modules() if isinstance(module, FusedMoE)]
+    draft_model = getattr(getattr(modelrunner, "drafter", None), "model", None)
+    if draft_model is not None:
+        moe_modules.extend(
+            module for module in draft_model.modules() if isinstance(module, FusedMoE)
+        )
 
-    for cur_layer_id, module in enumerate(moe_moules):
+    for cur_layer_id, module in enumerate(moe_modules):
         module.local_num_experts = num_global_new_phy_experts // new_ep_size
         module.global_num_experts = num_global_new_phy_experts
         module.global_redundant_expert_num = num_global_new_phy_experts - num_global_logical_experts
