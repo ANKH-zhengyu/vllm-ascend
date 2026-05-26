@@ -190,7 +190,7 @@ def get_expert_distribution_after_descale(
 
     # Append data for MTP layers (same distribution as corresponding main model layers)
     vllm_config = getattr(model_runner, "vllm_config", None)
-    num_mtp_layers = _get_mtp_num_layers(vllm_config)
+    num_mtp_layers = _get_mtp_num_layers(vllm_config) if vllm_config is not None else 0
     if num_mtp_layers > 0:
         num_main_moe_layers = len(need_load_h2d)
         for mtp_layer_idx in range(num_mtp_layers):
@@ -805,6 +805,15 @@ def d2d_transmission_for_scaling_down(model_runner):
         eplb_loader.asyn_expert_weight_transfer(reqs)
         eplb_loader.update_expert_map_and_weight(reqs)
 
+    # Append for MTP layers (same log2phy as corresponding main model layers)
+    vllm_config = getattr(model_runner, "vllm_config", None)
+    num_mtp_layers = _get_mtp_num_layers(vllm_config) if vllm_config is not None else 0
+    if num_mtp_layers > 0:
+        num_main_moe_layers = len(all_layer_log2phy_map)
+        for mtp_layer_idx in range(num_mtp_layers):
+            main_layer_idx = mtp_layer_idx % num_main_moe_layers if num_main_moe_layers > 0 else 0
+            all_layer_log2phy_map.append(all_layer_log2phy_map[main_layer_idx].clone())
+
     torch_npu.npu.synchronize()
 
     return all_layer_log2phy_map
@@ -816,6 +825,15 @@ def gen_all_layer_log2phy(model_runner, rank):
     for layer_id in range(cur_deployment.shape[0]):
         cur_layer_log2phy_map = generate_log2phy_map(cur_deployment[layer_id], rank)
         all_layer_log2phy.append(cur_layer_log2phy_map)
+
+    # Append for MTP layers (same log2phy as corresponding main model layers)
+    vllm_config = getattr(model_runner, "vllm_config", None)
+    num_mtp_layers = _get_mtp_num_layers(vllm_config) if vllm_config is not None else 0
+    if num_mtp_layers > 0:
+        num_main_moe_layers = len(all_layer_log2phy)
+        for mtp_layer_idx in range(num_mtp_layers):
+            main_layer_idx = mtp_layer_idx % num_main_moe_layers if num_main_moe_layers > 0 else 0
+            all_layer_log2phy.append(all_layer_log2phy[main_layer_idx].clone())
 
     return all_layer_log2phy
 
