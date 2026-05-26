@@ -188,6 +188,15 @@ def get_expert_distribution_after_descale(
         cur_rank_need_load = need_load_h2d[layer_id][rank_id].copy()
         cur_rank_need_load_h2d.append(cur_rank_need_load)
 
+    # Append data for MTP layers (same distribution as corresponding main model layers)
+    vllm_config = getattr(model_runner, "vllm_config", None)
+    num_mtp_layers = _get_mtp_num_layers(vllm_config)
+    if num_mtp_layers > 0:
+        num_main_moe_layers = len(need_load_h2d)
+        for mtp_layer_idx in range(num_mtp_layers):
+            main_layer_idx = mtp_layer_idx % num_main_moe_layers if num_main_moe_layers > 0 else 0
+            cur_rank_need_load_h2d.append(need_load_h2d[main_layer_idx][rank_id].copy())
+
     return cur_rank_need_load_h2d
 
 
@@ -333,6 +342,8 @@ def save_expert_weights_to_ram(
             return f"mtp.layers.{mtp_local_idx}.mlp.experts.{expert_id}.{suffix}"
         if model_type in ("exaone_moe", "exaone_moe_mtp"):
             return f"mtp.layers.{mtp_local_idx}.mlp.experts.{expert_id}.{suffix}"
+        if model_type in ("glm_moe_dsa",):
+            return f"model.layers.{layer_id}.mtp_block.mlp.experts.{expert_id}.{suffix}"
         if model_type in ("longcat_flash", "longcat_flash_mtp"):
             return (
                 f"model.mtp.layers.{mtp_local_idx}.transformer_layer.mlp.experts."
@@ -346,17 +357,32 @@ def save_expert_weights_to_ram(
     num_dense_layers = getattr(model_runner.model.config, "first_k_dense_replace", 0)
     num_hidden_layers = getattr(model_runner.model.config, "num_hidden_layers", 0)
     num_mtp_layers = _get_mtp_num_layers(vllm_config)
+    num_main_moe_layers = num_hidden_layers - num_dense_layers
+
     weights_to_save = set()
-    for index, cur_layer_need_load_h2d in enumerate(cur_rank_need_load_h2d):
+
+    # Main model layers
+    for index, cur_layer_need_load_h2d in enumerate(cur_rank_need_load_h2d[:num_main_moe_layers]):
         layer_id = index + num_dense_layers
         if cur_layer_need_load_h2d:
             for pos, expert_id in cur_layer_need_load_h2d:
                 for suffix in weight_suffixes:
                     weights_to_save.add(_generate_expert_weight_name(layer_id, expert_id, suffix))
 
-    model_loader = get_model_loader(vllm_config.load_config)
-    all_weight_iter = model_loader.get_all_weights(vllm_config.model_config, model_runner.model)
+    # MTP layers
+    if num_mtp_layers > 0:
+        for mtp_idx in range(num_mtp_layers):
+            layer_id = num_hidden_layers + mtp_idx
+            data_idx = num_main_moe_layers + mtp_idx
+            if data_idx < len(cur_rank_need_load_h2d) and cur_rank_need_load_h2d[data_idx]:
+                for pos, expert_id in cur_rank_need_load_h2d[data_idx]:
+                    for suffix in weight_suffixes:
+                        weights_to_save.add(_generate_expert_weight_name(layer_id, expert_id, suffix))
 
+    model_loader = get_model_loader(vllm_config.load_config)
+
+    # Load from main model
+    all_weight_iter = model_loader.get_all_weights(vllm_config.model_config, model_runner.model)
     saved_expert_weights = {}
     for weight_name, weight_tensor in all_weight_iter:
         if weight_name in weights_to_save:
@@ -364,6 +390,17 @@ def save_expert_weights_to_ram(
             if any(weight_name.endswith(suffix) for suffix in QUANT_WEIGHT_SUFFIXES):
                 weight_tensor = torch.squeeze(weight_tensor)
             saved_expert_weights[weight_name] = weight_tensor
+
+    # Load from draft model
+    drafter = getattr(model_runner, "drafter", None)
+    if drafter is not None and hasattr(drafter, "model") and num_mtp_layers > 0:
+        draft_weight_iter = model_loader.get_all_weights(vllm_config.model_config, drafter.model)
+        for weight_name, weight_tensor in draft_weight_iter:
+            if weight_name in weights_to_save and weight_name not in saved_expert_weights:
+                weight_tensor = weight_tensor.transpose(0, 1).contiguous()
+                if any(weight_name.endswith(suffix) for suffix in QUANT_WEIGHT_SUFFIXES):
+                    weight_tensor = torch.squeeze(weight_tensor)
+                saved_expert_weights[weight_name] = weight_tensor
 
     return saved_expert_weights
 
