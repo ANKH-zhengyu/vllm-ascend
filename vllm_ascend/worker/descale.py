@@ -478,9 +478,18 @@ def reload_fault_expert_weights(
 ) -> None:
     def _load_single_expert(expert_id: int, target_index: int, quant: bool | str = False):
         prefix = f"{module.layer_name}.{expert_id}"
-        w1_weight = experts_saved_weights[f"{prefix}.gate_proj.weight"]
-        w2_weight = experts_saved_weights[f"{prefix}.down_proj.weight"]
-        w3_weight = experts_saved_weights[f"{prefix}.up_proj.weight"]
+        w1_key = f"{prefix}.gate_proj.weight"
+        w2_key = f"{prefix}.down_proj.weight"
+        w3_key = f"{prefix}.up_proj.weight"
+        # GLM-5 MTP: weight file has mtp_block but module.layer_name may not
+        if w1_key not in experts_saved_weights and "mtp_block" not in prefix:
+            alt_prefix = prefix.replace(".mlp.", ".mtp_block.mlp.", 1)
+            w1_key = f"{alt_prefix}.gate_proj.weight"
+            w2_key = f"{alt_prefix}.down_proj.weight"
+            w3_key = f"{alt_prefix}.up_proj.weight"
+        w1_weight = experts_saved_weights[w1_key]
+        w2_weight = experts_saved_weights[w2_key]
+        w3_weight = experts_saved_weights[w3_key]
         if get_ascend_config().eplb_config.dynamic_eplb:
             device = module.w2_weight_list[target_index].device
             module._load_w2(
@@ -527,12 +536,26 @@ def reload_fault_expert_weights(
             )
 
         if quant:
-            w1_weight_scale = experts_saved_weights[f"{prefix}.gate_proj.weight_scale"].to(device)
-            w2_weight_scale = experts_saved_weights[f"{prefix}.down_proj.weight_scale"].to(device)
-            w3_weight_scale = experts_saved_weights[f"{prefix}.up_proj.weight_scale"].to(device)
-            w1_weight_offset = experts_saved_weights[f"{prefix}.gate_proj.weight_offset"].to(device)
-            w2_weight_offset = experts_saved_weights[f"{prefix}.down_proj.weight_offset"].to(device)
-            w3_weight_offset = experts_saved_weights[f"{prefix}.up_proj.weight_offset"].to(device)
+            s1_key = f"{prefix}.gate_proj.weight_scale"
+            s2_key = f"{prefix}.down_proj.weight_scale"
+            s3_key = f"{prefix}.up_proj.weight_scale"
+            o1_key = f"{prefix}.gate_proj.weight_offset"
+            o2_key = f"{prefix}.down_proj.weight_offset"
+            o3_key = f"{prefix}.up_proj.weight_offset"
+            if s1_key not in experts_saved_weights and "mtp_block" not in prefix:
+                alt_prefix = prefix.replace(".mlp.", ".mtp_block.mlp.", 1)
+                s1_key = f"{alt_prefix}.gate_proj.weight_scale"
+                s2_key = f"{alt_prefix}.down_proj.weight_scale"
+                s3_key = f"{alt_prefix}.up_proj.weight_scale"
+                o1_key = f"{alt_prefix}.gate_proj.weight_offset"
+                o2_key = f"{alt_prefix}.down_proj.weight_offset"
+                o3_key = f"{alt_prefix}.up_proj.weight_offset"
+            w1_weight_scale = experts_saved_weights[s1_key].to(device)
+            w2_weight_scale = experts_saved_weights[s2_key].to(device)
+            w3_weight_scale = experts_saved_weights[s3_key].to(device)
+            w1_weight_offset = experts_saved_weights[o1_key].to(device)
+            w2_weight_offset = experts_saved_weights[o2_key].to(device)
+            w3_weight_offset = experts_saved_weights[o3_key].to(device)
             module.w2_weight_offset.data[target_index].copy_(w2_weight_offset)
             dynamic_merge_view(module.w13_weight_offset.data[target_index], w1_weight_offset, w3_weight_offset)
             if get_ascend_config().eplb_config.dynamic_eplb:
