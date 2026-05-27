@@ -256,7 +256,7 @@ def init_dp_cpu_group(vllm_config: VllmConfig, group_type="normal") -> None:
     _set_pg_timeout(timeout=timeout, group=get_dp_group().cpu_group)
 
 
-def reinit_comm_group(use_mask_mc2: bool, vllm_config: VllmConfig, worker: NPUWorker) -> None:
+def reinit_comm_group(use_mask_mc2: bool, vllm_config: VllmConfig, worker: NPUWorker, coord_store=None) -> None:
     if use_mask_mc2:
         init_dp_cpu_group(vllm_config, "stateless")
     else:
