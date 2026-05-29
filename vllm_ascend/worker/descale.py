@@ -343,7 +343,9 @@ def save_expert_weights_to_ram(
         if model_type in ("exaone_moe", "exaone_moe_mtp"):
             return f"mtp.layers.{mtp_local_idx}.mlp.experts.{expert_id}.{suffix}"
         if model_type in ("glm_moe_dsa",):
-            return f"model.layers.{layer_id}.mtp_block.mlp.experts.{expert_id}.{suffix}"
+            # Checkpoint原始权重名不含mtp_block，vllm的_rewrite_spec_layer_name
+            # 会在load_weights时自动加上mtp_block，所以这里要和checkpoint原始名保持一致
+            return f"model.layers.{layer_id}.mlp.experts.{expert_id}.{suffix}"
         if model_type in ("longcat_flash", "longcat_flash_mtp"):
             return (
                 f"model.mtp.layers.{mtp_local_idx}.transformer_layer.mlp.experts."
@@ -481,8 +483,13 @@ def reload_fault_expert_weights(
         w1_key = f"{prefix}.gate_proj.weight"
         w2_key = f"{prefix}.down_proj.weight"
         w3_key = f"{prefix}.up_proj.weight"
-        # GLM-5 MTP: weight file has mtp_block but module.layer_name may not
-        if w1_key not in experts_saved_weights and "mtp_block" not in prefix:
+        # GLM-5 MTP: checkpoint原始权重名不含mtp_block，但module.layer_name含mtp_block
+        if w1_key not in experts_saved_weights and "mtp_block" in prefix:
+            alt_prefix = prefix.replace(".mtp_block.mlp.", ".mlp.", 1)
+            w1_key = f"{alt_prefix}.gate_proj.weight"
+            w2_key = f"{alt_prefix}.down_proj.weight"
+            w3_key = f"{alt_prefix}.up_proj.weight"
+        elif w1_key not in experts_saved_weights and "mtp_block" not in prefix:
             alt_prefix = prefix.replace(".mlp.", ".mtp_block.mlp.", 1)
             w1_key = f"{alt_prefix}.gate_proj.weight"
             w2_key = f"{alt_prefix}.down_proj.weight"
@@ -542,7 +549,15 @@ def reload_fault_expert_weights(
             o1_key = f"{prefix}.gate_proj.weight_offset"
             o2_key = f"{prefix}.down_proj.weight_offset"
             o3_key = f"{prefix}.up_proj.weight_offset"
-            if s1_key not in experts_saved_weights and "mtp_block" not in prefix:
+            if s1_key not in experts_saved_weights and "mtp_block" in prefix:
+                alt_prefix = prefix.replace(".mtp_block.mlp.", ".mlp.", 1)
+                s1_key = f"{alt_prefix}.gate_proj.weight_scale"
+                s2_key = f"{alt_prefix}.down_proj.weight_scale"
+                s3_key = f"{alt_prefix}.up_proj.weight_scale"
+                o1_key = f"{alt_prefix}.gate_proj.weight_offset"
+                o2_key = f"{alt_prefix}.down_proj.weight_offset"
+                o3_key = f"{alt_prefix}.up_proj.weight_offset"
+            elif s1_key not in experts_saved_weights and "mtp_block" not in prefix:
                 alt_prefix = prefix.replace(".mlp.", ".mtp_block.mlp.", 1)
                 s1_key = f"{alt_prefix}.gate_proj.weight_scale"
                 s2_key = f"{alt_prefix}.down_proj.weight_scale"
