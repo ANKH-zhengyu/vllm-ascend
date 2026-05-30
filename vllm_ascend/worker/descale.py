@@ -343,8 +343,6 @@ def save_expert_weights_to_ram(
         if model_type in ("exaone_moe", "exaone_moe_mtp"):
             return f"mtp.layers.{mtp_local_idx}.mlp.experts.{expert_id}.{suffix}"
         if model_type in ("glm_moe_dsa",):
-            # Checkpoint原始权重名不含mtp_block，vllm的_rewrite_spec_layer_name
-            # 会在load_weights时自动加上mtp_block，所以这里要和checkpoint原始名保持一致
             return f"model.layers.{layer_id}.mlp.experts.{expert_id}.{suffix}"
         if model_type in ("longcat_flash", "longcat_flash_mtp"):
             return (
@@ -363,7 +361,6 @@ def save_expert_weights_to_ram(
 
     weights_to_save = set()
 
-    # Main model layers
     for index, cur_layer_need_load_h2d in enumerate(cur_rank_need_load_h2d[:num_main_moe_layers]):
         layer_id = index + num_dense_layers
         if cur_layer_need_load_h2d:
@@ -371,7 +368,6 @@ def save_expert_weights_to_ram(
                 for suffix in weight_suffixes:
                     weights_to_save.add(_generate_expert_weight_name(layer_id, expert_id, suffix))
 
-    # MTP layers
     if num_mtp_layers > 0:
         for mtp_idx in range(num_mtp_layers):
             layer_id = num_hidden_layers + mtp_idx
@@ -383,7 +379,6 @@ def save_expert_weights_to_ram(
 
     model_loader = get_model_loader(vllm_config.load_config)
 
-    # Load from main model
     all_weight_iter = model_loader.get_all_weights(vllm_config.model_config, model_runner.model)
     saved_expert_weights = {}
     for weight_name, weight_tensor in all_weight_iter:
@@ -393,7 +388,6 @@ def save_expert_weights_to_ram(
                 weight_tensor = torch.squeeze(weight_tensor)
             saved_expert_weights[weight_name] = weight_tensor
 
-    # Load from draft model
     drafter = getattr(model_runner, "drafter", None)
     if drafter is not None and hasattr(drafter, "model") and num_mtp_layers > 0:
         draft_weight_iter = model_loader.get_all_weights(vllm_config.model_config, drafter.model)
@@ -483,7 +477,6 @@ def reload_fault_expert_weights(
         w1_key = f"{prefix}.gate_proj.weight"
         w2_key = f"{prefix}.down_proj.weight"
         w3_key = f"{prefix}.up_proj.weight"
-        # GLM-5 MTP: checkpoint原始权重名不含mtp_block，但module.layer_name含mtp_block
         if w1_key not in experts_saved_weights and "mtp_block" in prefix:
             alt_prefix = prefix.replace(".mtp_block.mlp.", ".mlp.", 1)
             w1_key = f"{alt_prefix}.gate_proj.weight"
