@@ -509,7 +509,7 @@ def reload_expert_weights(
     if draft_model is not None:
         for module in draft_model.modules():
             if isinstance(module, FusedMoE):
-                if cur_rank_need_load_h2d[cur_layer_id] is not None:
+                if cur_layer_id < len(cur_rank_need_load_h2d) and cur_rank_need_load_h2d[cur_layer_id] is not None:
                     for slot_pos, expert_id in cur_rank_need_load_h2d[cur_layer_id]:
                         _load_single_expert(expert_id=expert_id, target_index=slot_pos, quant=quant)
                 cur_layer_id += 1
