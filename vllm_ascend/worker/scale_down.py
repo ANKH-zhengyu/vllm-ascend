@@ -201,6 +201,7 @@ def init_dp_cpu_group(vllm_config: VllmConfig, coord_store, group_type="normal")
     timeout = timedelta(seconds=vllm_config.parallel_config.fault_tolerance_config.gloo_comm_timeout)
     _set_pg_timeout(timeout=timeout, group=get_dp_group().cpu_group)
 
+
 def _is_mtp_speculative(vllm_config) -> bool:
     spec_config = getattr(vllm_config, "speculative_config", None)
     if spec_config is None:
@@ -225,9 +226,7 @@ def _get_mtp_num_layers(vllm_config) -> int:
         if num:
             return num
 
-    raise RuntimeError(
-        "MTP layer count not found in model config; unsupported model configuration."
-    )
+    raise RuntimeError("MTP layer count not found in model config; unsupported model configuration.")
 
 
 def _append_mtp_copies(main_list: list, num_mtp_layers: int) -> None:
@@ -241,9 +240,7 @@ def _append_mtp_copies(main_list: list, num_mtp_layers: int) -> None:
         main_list.append(item.clone() if hasattr(item, "clone") else copy(item))
 
 
-def _resolve_mtp_weight_prefix(
-    prefix: str, experts_saved_weights: dict[str, torch.Tensor], probe_key: str
-) -> str:
+def _resolve_mtp_weight_prefix(prefix: str, experts_saved_weights: dict[str, torch.Tensor], probe_key: str) -> str:
     """Resolve GLM-5 MTP mtp_block prefix mismatch.
 
     The checkpoint raw weight names and module.layer_name may differ;
@@ -296,7 +293,6 @@ def _get_mtp_weight_path(
                 suffix=suffix,
             )
     return f"model.layers.{layer_id}.mlp.experts.{expert_id}.{suffix}"
-
 
 
 def load_expert_weights_to_cpu(
@@ -423,8 +419,7 @@ def reload_expert_weights(
 ) -> None:
     def _load_single_expert(expert_id: int, target_index: int, quant: bool | str = False):
         raw_prefix = f"{module.layer_name}.{expert_id}"
-        prefix = _resolve_mtp_weight_prefix(raw_prefix, experts_saved_weights,
-                                               f"{raw_prefix}.gate_proj.weight")
+        prefix = _resolve_mtp_weight_prefix(raw_prefix, experts_saved_weights, f"{raw_prefix}.gate_proj.weight")
         w1_key = f"{prefix}.gate_proj.weight"
         w2_key = f"{prefix}.down_proj.weight"
         w3_key = f"{prefix}.up_proj.weight"
@@ -477,8 +472,9 @@ def reload_expert_weights(
             )
 
         if quant:
-            prefix = _resolve_mtp_weight_prefix(raw_prefix, experts_saved_weights,
-                                                   f"{raw_prefix}.gate_proj.weight_scale")
+            prefix = _resolve_mtp_weight_prefix(
+                raw_prefix, experts_saved_weights, f"{raw_prefix}.gate_proj.weight_scale"
+            )
             s1_key = f"{prefix}.gate_proj.weight_scale"
             s2_key = f"{prefix}.down_proj.weight_scale"
             s3_key = f"{prefix}.up_proj.weight_scale"
@@ -635,9 +631,7 @@ def reconfigure_moe(
     moe_modules = [module for module in model_runner.model.modules() if isinstance(module, FusedMoE)]
     draft_model = getattr(getattr(model_runner, "drafter", None), "model", None)
     if draft_model is not None:
-        moe_modules.extend(
-            module for module in draft_model.modules() if isinstance(module, FusedMoE)
-        )
+        moe_modules.extend(module for module in draft_model.modules() if isinstance(module, FusedMoE))
 
     for cur_layer_id, module in enumerate(moe_modules):
         module.local_num_experts = num_global_new_phy_experts // new_ep_size
