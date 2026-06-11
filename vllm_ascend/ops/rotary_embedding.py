@@ -59,27 +59,6 @@ _cos_slice: torch.Tensor = None
 _sin_slice: torch.Tensor = None
 
 
-def reset_rotary_embedding_globals():
-    """Reset rotary embedding global caches that depend on ``max_num_batched_tokens``.
-
-    This should be called during scale-down (fault-tolerance) so that
-    ``set_cos_and_sin`` will re-allocate tensors with the correct
-    ``max_num_batched_tokens`` on the next forward pass.
-
-    NOTE: We only reset caches whose sizes are tied to ``max_num_batched_tokens``.
-    Caches like ``_cos_cache`` / ``_sin_cache`` / ``_cos_sin_cache`` are derived
-    from the model's ``cos_sin_cache`` (size = max_position_embeddings) and do
-    NOT need to be reset.
-    """
-    global _cos_mla, _sin_mla, _cos, _sin, _cos_slice, _sin_slice
-    _cos_mla = None
-    _sin_mla = None
-    _cos = None
-    _sin = None
-    _cos_slice = None
-    _sin_slice = None
-
-
 def set_cos_and_sin(vllm_config, max_num_reqs, decode_token_per_req, dtype, device):
     global _cos_mla
     global _sin_mla
@@ -117,14 +96,6 @@ def get_cos_and_sin_mla(positions, use_cache=False):
     global _cos_mla
     global _sin_mla
     num_tokens = positions.size(0)
-
-    # Dynamically expand caches if num_tokens exceeds pre-allocated size.
-    # This can happen in MTP draft model when cuda graph padding produces
-    # more tokens than max_num_batched_tokens.
-    if _cos_mla is None or _cos_mla.size(0) < num_tokens:
-        _cos_mla = torch.ones(num_tokens, 1, 1, cos.size(-1), dtype=cos.dtype, device=cos.device)
-        _sin_mla = torch.zeros(num_tokens, 1, 1, sin.size(-1), dtype=sin.dtype, device=sin.device)
-
     _cos_mla[:num_tokens, ...] = cos
     _sin_mla[:num_tokens, ...] = sin
     return _cos_mla[:num_tokens, ...], _sin_mla[:num_tokens, ...]
@@ -165,17 +136,6 @@ def update_cos_sin(positions):
         return
 
     num_tokens = positions.size(0)
-
-    # Dynamically expand caches if num_tokens exceeds pre-allocated size.
-    # This can happen when cuda graph padding produces more tokens than
-    # max_num_batched_tokens.
-    if _cos.size(1) < num_tokens:
-        rope_dim = _cos.size(-1)
-        dtype = _cos.dtype
-        device = _cos.device
-        _cos = torch.ones(1, num_tokens, 1, rope_dim, dtype=dtype, device=device)
-        _sin = torch.zeros(1, num_tokens, 1, rope_dim, dtype=dtype, device=device)
-
     _cos[:, :num_tokens] = (
         _cos_sin_cache.index_select(0, positions).view(num_tokens, 2, -1).repeat(1, 1, 2).chunk(2, dim=-2)[0]
     )
