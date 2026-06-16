@@ -380,10 +380,9 @@ class ScaleDownHelper:
             drafter = getattr(model_runner, "drafter", None)
             if drafter is not None and hasattr(drafter, "model"):
                 mtp_model = drafter.model
-                for mtp_layer_idx in range(num_mtp_layers):
-                    mtp_layer = mtp_model.model.layers[mtp_layer_idx]
-                    map_cpu = mtp_layer.mlp.experts.global_expert_map.cpu()
-                    all_layer_global_expert_map.append(map_cpu)
+                for module in mtp_model.modules():
+                    if isinstance(module, FusedMoE):
+                        all_layer_global_expert_map.append(module.global_expert_map.cpu())
         return torch.stack(all_layer_global_expert_map)
 
     def _get_mtp_num_layers(self) -> int:
